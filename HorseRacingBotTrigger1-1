@@ -1,0 +1,72 @@
+module BfexplorerBot
+
+//(*
+#I @"C:\Program Files (x86)\BeloSoft\Bfexplorer\"
+
+#r "BeloSoft.Data.dll"
+#r "BeloSoft.Betfair.API.dll"
+#r "BeloSoft.Bfexplorer.Domain.dll"
+#r "BeloSoft.Bfexplorer.Trading.dll"
+#r "BeloSoft.Bfexplorer.Service.Core.dll"
+//*)
+
+open System
+
+open BeloSoft.Data
+open BeloSoft.Bfexplorer.Domain
+open BeloSoft.Bfexplorer.Trading
+
+let toIndexes (value : string) =
+    try
+        value.Split(',') |> Array.map Int32.Parse |> List.ofArray
+    with
+    | _ -> List.empty
+
+/// <summary>
+/// HorseRacingBotTrigger
+/// </summary>
+type HorseRacingBotTrigger(market : Market, _selection : Selection, _botName : string, botTriggerParameters : BotTriggerParameters, _myBfexplorer : IMyBfexplorer) =
+
+    let allowedSelectionIndexes = toIndexes (defaultArg (botTriggerParameters.GetParameter<string>("AllowedSelectionIndexes")) "1")
+
+    let isHorseRacingMarket() =
+        market.MarketInfo.BetEventType.Id = 7 && market.MarketDescription.MarketType = "WIN"
+
+    let getActiveSelections() =
+        market.Selections |> Seq.filter isActiveSelection |> Seq.toList
+
+    let getMySelectionsData() = maybe {
+        if allowedSelectionIndexes.Length > 0
+        then
+            let selections = getActiveSelections()
+            let mumberOfSelections = selections.Length
+            let maximalIndex = allowedSelectionIndexes |> List.max
+
+
+
+            if mumberOfSelections >= maximalIndex
+            then              
+                return allowedSelectionIndexes |> List.map (fun index -> selections.[index - 1]), mumberOfSelections
+    }
+
+
+    interface IBotTrigger with
+
+        member __.Execute() =
+            if isHorseRacingMarket()
+            then
+                match getMySelectionsData() with
+                | Some (selections, mumberOfSelections) ->
+
+                    let mySelectionNames = selections |> List.map (fun mySelection -> mySelection.Name) |> String.concat ", "
+                    let mySelectionBookValue = selections |> List.map (fun mySelection -> mySelection.LastPriceTraded)  |> List.sum
+   
+                    TriggerResult.EndExecutionWithMessage (sprintf "\nMy selections: %s LPT:%f\nNumber of runners: %d" mySelectionNames mySelectionBookValue mumberOfSelections)
+
+
+                | None -> TriggerResult.EndExecutionWithMessage "Failed to make my selections!"
+            else
+                TriggerResult.EndExecutionWithMessage "You can run this bot on a horse racing market only!"
+
+        member __.EndExecution() =
+            ()
