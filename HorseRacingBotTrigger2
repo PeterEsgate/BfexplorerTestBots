@@ -1,0 +1,208 @@
+module BfexplorerBot
+
+(*
+#I @"C:\Program Files (x86)\BeloSoft\Bfexplorer\"
+
+#r "BeloSoft.Data.dll"
+#r "BeloSoft.Betfair.API.dll"
+#r "BeloSoft.Bfexplorer.Domain.dll"
+#r "BeloSoft.Bfexplorer.Trading.dll"
+#r "BeloSoft.Bfexplorer.Service.Core.dll"
+*)
+
+open System
+
+open BeloSoft.Data
+open BeloSoft.Bfexplorer.Domain
+open BeloSoft.Bfexplorer.Trading
+
+let toIndexes (value : string) =
+    try
+        value.Split(',') |> Array.map Int32.Parse |> List.ofArray
+    with
+    | _ -> List.empty
+
+/// <summary>
+/// MySelection
+/// </summary>
+type MySelection(selection : Selection) =
+    
+    let mutable startPrice = selection.LastPriceTraded
+    let mutable startPosition = 0y
+    let mutable oddsDifference = 0
+    let mutable positionDifference = 0y
+
+    member _this.Id
+        with get() = selection.Id
+
+    member _this.Selection
+        with get() = selection
+
+    member _this.StartPosition
+        with get() = startPosition
+
+    member _this.OddsDifference
+        with get() = oddsDifference
+
+    member _this.PositionDifference
+        with get() = positionDifference
+
+    member _this.SetStartPrice() =
+        startPrice <- selection.LastPriceTraded
+
+    member _this.SetStartPosition(position : sbyte) =
+        startPosition <- position
+
+    member _this.SetPositionDifference(position : sbyte) =
+        positionDifference <- startPosition - position
+
+    member _this.SetOddsDifference() =
+        oddsDifference <- selection.OddsContext.GetOddsDifference(startPrice, selection.LastPriceTraded)
+    
+/// <summary>
+/// TriggerStatus
+/// </summary>
+type TriggerStatus =
+    | Initialize
+    | WaitForRaceStart
+    | WaitForStartTradingSession
+
+/// <summary>
+/// HorseRacingBotTrigger
+/// </summary>
+type HorseRacingBotTrigger2(market : Market, _selection : Selection, _botName : string, botTriggerParameters : BotTriggerParameters, myBfexplorer : IMyBfexplorer) =
+
+    let myStrategyResults = MyStrategyOperations.GetMyStrategyResults(HorseRacingBotTrigger2)
+    let maxNumberOfLosses = defaultArg (botTriggerParameters.GetParameter<int>("MaxNumberOfLosses")) 3
+    let allowedSelectionIndexes = toIndexes (defaultArg (botTriggerParameters.GetParameter<string>("AllowedSelectionIndexes")) "1,2,3,4,5,6")
+    let timeToStart = defaultArg (botTriggerParameters.GetParameter<float>("TimeToStart")) 40.0
+    let favouritesPrice = defaultArg (botTriggerParameters.GetParameter<float>("FavouritesPrice")) 50.0
+
+    let mutable status = TriggerStatus.Initialize
+    let mutable mySelections = nil<MySelection list>
+    let mutable startTime = DateTime.MinValue
+
+    let outputMessage message =
+        myBfexplorer.BfexplorerService.OutputMessage(message, market.Id)
+
+    let isHorseRacingMarket() =
+        market.MarketInfo.BetEventType.Id = 7 && market.MarketDescription.MarketType = "WIN"
+
+    let getActiveSelections() =
+        market.Selections |> Seq.filter isActiveSelection |> Seq.toList
+
+    let getFavourites() = 
+        getActiveSelections() 
+        |> List.sortBy (fun mySelection -> mySelection.LastPriceTraded)
+
+    let getXFavourites count = 
+        let favourites = getFavourites()
+        
+        favourites |> List.take (min count favourites.Length)
+
+    let getMySelections() = maybe {
+        if allowedSelectionIndexes.Length > 0
+        then
+            let selections = getActiveSelections()
+            let mumberOfSelections = selections.Length
+            let maximalIndex = allowedSelectionIndexes |> List.max
+
+            if mumberOfSelections >= maximalIndex
+            then              
+                return allowedSelectionIndexes |> List.map (fun index -> selections.[index - 1])
+    }
+
+    let setSelectionPositions (setPosition : sbyte -> MySelection -> unit) (forMySelections : MySelection list) =
+        getFavourites()
+        |> List.iteri (fun index aSelection ->
+                let selectionId = aSelection.Id
+
+                forMySelections 
+                |> List.tryFind (fun mySelection -> mySelection.Id = selectionId)
+                |> Option.iter (setPosition (sbyte (index + 1)))
+            )
+
+    let reportMySelections (toString : MySelection -> string) (forMySelections : MySelection list) =
+        forMySelections |> List.map toString |> String.concat "\n" |> outputMessage        
+
+    let initialize() =
+        if isHorseRacingMarket()
+        then
+            match getMySelections() with
+            | Some selections ->
+
+                status <- TriggerStatus.WaitForRaceStart
+                mySelections <- selections |> List.map MySelection
+
+                TriggerResult.WaitingForOperation
+
+            | None -> TriggerResult.EndExecutionWithMessage "Failed to make my selections!"
+        else
+            TriggerResult.EndExecutionWithMessage "You can run this bot on a horse racing market only!"
+
+    let isTimeToStart() =
+        (DateTime.Now - startTime).TotalSeconds >= timeToStart
+
+    let setStartData() =
+        mySelections |> setSelectionPositions (fun position mySelection -> mySelection.SetStartPrice(); mySelection.SetStartPosition(position))
+        
+        mySelections
+        |> List.sortBy (fun mySelection -> mySelection.StartPosition)
+        |> reportMySelections (fun mySelection -> sprintf "%d. %s" mySelection.StartPosition mySelection.Selection.Name)
+
+        status <- TriggerStatus.WaitForStartTradingSession
+        startTime <- DateTime.Now        
+
+    let getMySelection() = maybe {
+        let favourites = getXFavourites 3
+
+        if favourites.Length >= 2 && (favourites |> List.take 2 |> List.forall (fun mySelection -> mySelection.LastPriceTraded <= favouritesPrice))
+        then
+            mySelections |> setSelectionPositions (fun position mySelection -> mySelection.SetOddsDifference(); mySelection.SetPositionDifference(position))
+
+            let mySortedSelections = mySelections |> List.sortBy (fun mySelection -> mySelection.PositionDifference)
+
+            mySortedSelections |> reportMySelections (fun mySelection -> sprintf "%s: %d" mySelection.Selection.Name mySelection.PositionDifference)
+
+            let mySelection = (mySortedSelections |> List.head).Selection
+            let mySelectionId = mySelection.Id
+
+            if not (favourites |> List.exists (fun favourite -> favourite.Id = mySelectionId))
+            then
+                return mySelection
+    }
+
+    interface IBotTrigger with
+
+        member __.Execute() =
+            match myStrategyResults with
+            | Some myResults ->
+                let  mutable myLossesInRow =  match myResults.BettingStreak with
+                | LosingStreak numberOfBets ->
+            
+            if myLossesInRow <= maxNumberOfLosses
+            then
+
+            match status with
+            | TriggerStatus.Initialize -> initialize()
+            | TriggerStatus.WaitForRaceStart -> 
+            
+                if market.IsInPlay
+                then
+                    setStartData()
+
+                TriggerResult.WaitingForOperation
+
+            | TriggerStatus.WaitForStartTradingSession -> 
+
+                if isTimeToStart()
+                then
+                    match getMySelection() with
+                    | Some mySelection -> TriggerResult.ExecuteActionBotOnSelection mySelection
+                    | None -> TriggerResult.EndExecution
+                else
+                    TriggerResult.WaitingForOperation
+           
+
+        member __.EndExecution() =
+            ()
