@@ -37,15 +37,6 @@ type TriggerStatus =
 
 
 /// <summary>
-/// MyDutchBetOrder
-/// </summary>
-[<NoEquality; NoComparison>]
-type MyDutchBetOrder =
-    {
-        Selection : Selection
-        Size : float
-    }
-/// <summary>
 /// MySelection
 /// </summary>
 type MySelection(selection : Selection) =
