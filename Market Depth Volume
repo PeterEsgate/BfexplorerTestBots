@@ -1,41 +1,38 @@
-    let getMarketDepthVolume (betType : BetType) count =
-        let priceGridData = selection.PriceGridData.DataContext
-        let startIndex, nextIndex, findFun =
-            if betType = BetType.Back
-            then
-                priceGridData.BestToLayIndex, -1, (fun (priceData : PriceData) -> priceData.ToLay > 0.0)
-            else
-                priceGridData.BestToBackIndex, +1, (fun (priceData : PriceData) -> priceData.ToBack > 0.0)
+    let getMarketDepthVolume(betType : BetType) (selection: Selection) count = 
+      let priceGridData = selection.PriceGridData.DataContext
+      let startIndex, nextIndex, findFun =
+           if betType = BetType.Back
+           then
+               priceGridData.BestToLayIndex, -1, (fun (priceData : PriceData) -> priceData.ToLay > 0.0)
+           else
+               priceGridData.BestToBackIndex, +1, (fun (priceData : PriceData) -> priceData.ToBack > 0.0)
 
-        let mutable doLoop = true
-        let mutable index = startIndex
-        let mutable volume = 0.0
-        let mutable count = count
+      let mutable doLoop = true
+      let mutable index = startIndex
+      let mutable vol = 0.0
+      let mutable count = count
 
-        while doLoop do
-            if index > 0 && index < OddsData.NumberOfOdds
-            then
-                let priceData = priceGridData.GetPriceData(index)
+      while doLoop do
+           if index > 0 && index < OddsData.NumberOfOdds
+           then
+               let priceData = priceGridData.GetPriceData(index)
 
-                if findFun priceData
-                then
-                    count <- count - 1
-                    if count = 0 && betType = BetType.Back
-                    then
-                     volume <- priceData.BackOrderSize
-                     doLoop <- false
-
-                     elif count = 0 && betType = BetType.Lay
+               if findFun priceData
+               then
+                     count <- count - 1
+                     if betType = BetType.Back
                      then
-                       volume <- priceData.LayOrderSize
+                      vol  <- priceData.ToBack
+                     else
+                      vol <- priceData.ToLay
+                     if count = 0 
+                     then
                        doLoop <- false
-                else
-                    index <- index + nextIndex
-            else
-                doLoop <- false
+                     else
+                       index <- index + nextIndex
+               else
+                   index <- index + nextIndex
+           else
+               doLoop <- false
 
-        if volume > 0.0
-        then
-            None
-        else
-            Some volume
+      vol
