@@ -1,0 +1,34 @@
+let getMarketDepthMatched(betType : BetType) (selection: Selection) count = 
+        let priceGridData = selection.PriceGridData.DataContext
+        let startIndex, nextIndex, findFun =
+             if betType = BetType.Back
+             then
+                 priceGridData.BestToLayIndex, -1, (fun (priceData : PriceData) -> priceData.ToLay > 0.0)
+             else
+                 priceGridData.BestToBackIndex, +1, (fun (priceData : PriceData) -> priceData.ToBack > 0.0)
+    
+        let mutable doLoop = true
+        let mutable index = startIndex
+        let mutable price = 0.0
+        let mutable count = count
+    
+        while doLoop do
+             if index > 0 && index < OddsData.NumberOfOdds
+             then
+                 let priceData = priceGridData.GetPriceData(index)
+    
+                 if findFun priceData
+                 then
+                       count <- count - 1
+                       price <- priceData.TotalMatched
+                       if count = 0 
+                       then
+                         doLoop <- false
+                       else
+                         index <- index + nextIndex
+                 else
+                     index <- index + nextIndex
+             else
+                 doLoop <- false
+    
+        price
